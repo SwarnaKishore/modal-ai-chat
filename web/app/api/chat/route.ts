@@ -26,6 +26,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Expected a non-empty messages array." }, { status: 400 });
   }
 
+  const forwardedMessages = messages.filter((message, index) => {
+    if (index === 0 && message.role === "assistant") return false;
+    return message.role === "user" || message.role === "assistant";
+  });
+
+  if (!forwardedMessages.some((message) => message.role === "user")) {
+    return NextResponse.json({ error: "Expected at least one user message." }, { status: 400 });
+  }
+
   const response = await fetch(`${modalBaseUrl.replace(/\/$/, "")}/v1/chat/completions`, {
     method: "POST",
     headers: {
@@ -39,7 +48,7 @@ export async function POST(request: NextRequest) {
           role: "system",
           content: "You are a concise, helpful assistant.",
         },
-        ...messages,
+        ...forwardedMessages,
       ],
       temperature: 0.7,
       max_tokens: 800,
