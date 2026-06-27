@@ -5,7 +5,44 @@ type ChatMessage = {
   content: string;
 };
 
+type DailyLimitEntry = {
+  count: number;
+  resetAt: number;
+};
+
 export const runtime = "nodejs";
+
+const DAILY_MESSAGE_LIMIT = 3;
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
+const ipDailyLimits = new Map<string, DailyLimitEntry>();
+
+function getClientIp(request: NextRequest) {
+  const forwardedFor = request.headers.get("x-forwarded-for");
+  if (forwardedFor) return forwardedFor.split(",")[0]?.trim() ?? "unknown";
+
+  const realIp = request.headers.get("x-real-ip");
+  if (realIp) return realIp;
+
+  return "unknown";
+}
+
+function checkDailyLimit(ip: string) {
+  const now = Date.now();
+  const current = ipDailyLimits.get(ip);
+
+  if (!current || current.resetAt <= now) {
+    const next = { count: 1, resetAt: now + DAY_IN_MS };
+    ipDailyLimits.set(ip, next);
+    return { allowed: true, remaining: DAILY_MESSAGE_LIMIT - next.count, resetAt: next.resetAt };
+  }
+
+  if (current.count >= DAILY_MESSAGE_LIMIT) {
+    return { allowed: false, remaining: 0, resetAt: current.resetAt };
+  }
+
+  current.count += 1;
+  return { allowed: true, remaining: DAILY_MESSAGE_LIMIT - current.count, resetAt: current.resetAt };
+}
 
 export async function POST(request: NextRequest) {
   const modalBaseUrl = process.env.MODAL_BASE_URL;
@@ -33,6 +70,20 @@ export async function POST(request: NextRequest) {
 
   if (!forwardedMessages.some((message) => message.role === "user")) {
     return NextResponse.json({ error: "Expected at least one user message." }, { status: 400 });
+  }
+
+  const limit = checkDailyLimit(getClientIp(request));
+
+  if (!limit.allowed) {
+    return NextResponse.json(
+      {
+        error: "Daily message limit reached.",
+        limit: DAILY_MESSAGE_LIMIT,
+        remaining: limit.remaining,
+        resetAt: new Date(limit.resetAt).toISOString(),
+      },
+      { status: 429 },
+    );
   }
 
   const response = await fetch(`${modalBaseUrl.replace(/\/$/, "")}/v1/chat/completions`, {
@@ -70,5 +121,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Modal returned an unexpected response." }, { status: 502 });
   }
 
-  return NextResponse.json({ content });
+  return NextResponse.json({
+    content,
+    rateLimit: {
+      limit: DAILY_MESSAGE_LIMIT,
+      remaining: limit.remaining,
+      resetAt: new Date(limit.resetAt).toISOString(),
+    },
+  });
 }
