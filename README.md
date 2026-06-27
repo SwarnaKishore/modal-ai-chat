@@ -41,27 +41,27 @@ web/
 Install and authenticate the Modal CLI:
 
 ```bash
-pip install modal
-modal setup
+python3 -m pip install modal
+python3 -m modal setup
 ```
 
 Create the API key secret used by vLLM:
 
 ```bash
 cd modal-backend
-modal secret create qwen-api-key VLLM_API_KEY=change-me
+python3 -m modal secret create qwen-api-key VLLM_API_KEY=change-me
 ```
 
 Deploy the backend:
 
 ```bash
-modal deploy app.py
+python3 -m modal deploy app.py
 ```
 
-The deploy command prints a URL similar to:
+Current Modal endpoint:
 
 ```text
-https://your-workspace--qwen-vllm-serve.modal.run
+https://swarnakishoree--qwen-vllm-serve.modal.run
 ```
 
 Use that URL as `MODAL_BASE_URL` in the web app.
@@ -86,7 +86,7 @@ http://localhost:3000
 Required environment variables:
 
 ```text
-MODAL_BASE_URL=https://your-workspace--qwen-vllm-serve.modal.run
+MODAL_BASE_URL=https://swarnakishoree--qwen-vllm-serve.modal.run
 MODAL_API_KEY=change-me
 QWEN_MODEL=Qwen/Qwen2.5-7B-Instruct
 ```
