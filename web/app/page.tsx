@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, KeyboardEvent, useMemo, useState } from "react";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -51,6 +51,13 @@ export default function Home() {
     }
   }
 
+  function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.shiftKey) return;
+
+    event.preventDefault();
+    event.currentTarget.form?.requestSubmit();
+  }
+
   return (
     <main className="shell">
       <section className="chat-panel" aria-label="Qwen chat">
@@ -80,6 +87,7 @@ export default function Home() {
             aria-label="Message"
             value={input}
             onChange={(event) => setInput(event.target.value)}
+            onKeyDown={handleComposerKeyDown}
             placeholder="Ask Qwen..."
             rows={3}
           />
