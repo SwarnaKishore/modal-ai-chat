@@ -47,8 +47,20 @@ export async function POST(req: NextRequest) {
 
   if (!allowed) {
     return NextResponse.json(
-      { error: "Daily message limit reached. Come back tomorrow." },
-      { status: 429 }
+      {
+        error: "You’ve used today’s 3 chats. Try again tomorrow.",
+        limit: DAILY_LIMIT,
+        remaining,
+        resetAt: new Date(resetAt).toISOString(),
+      },
+      {
+        status: 429,
+        headers: {
+          "X-RateLimit-Limit": String(DAILY_LIMIT),
+          "X-RateLimit-Remaining": String(remaining),
+          "X-RateLimit-Reset": new Date(resetAt).toISOString(),
+        },
+      }
     );
   }
 
@@ -106,7 +118,7 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     console.error("Modal upstream error:", err);
     return NextResponse.json(
-      { error: "Could not reach the inference server." },
+      { error: "The model server is waking up or temporarily unavailable. Please try again in a moment." },
       { status: 502 }
     );
   }
@@ -114,8 +126,18 @@ export async function POST(req: NextRequest) {
   if (!upstreamResponse.ok) {
     const text = await upstreamResponse.text().catch(() => "");
     console.error("Modal error response:", text);
+
+    const errorMessage =
+      upstreamResponse.status === 401 || upstreamResponse.status === 403
+        ? "The model server rejected this request. Please check the Modal API key configuration."
+        : upstreamResponse.status === 429
+          ? "The model server is busy right now. Please try again in a moment."
+          : upstreamResponse.status >= 500
+            ? "The model server is warming up or temporarily unavailable. Please try again shortly."
+            : "The model server could not complete this request. Please try again.";
+
     return NextResponse.json(
-      { error: "Inference server returned an error." },
+      { error: errorMessage },
       { status: upstreamResponse.status }
     );
   }

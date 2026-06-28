@@ -8,6 +8,12 @@ type ChatMessage = {
   meta?: string;
 };
 
+type ChatErrorResponse = {
+  error?: string;
+  remaining?: number;
+  resetAt?: string;
+};
+
 const MODELS = [
   { id: "Qwen/Qwen2.5-7B-Instruct", label: "Qwen2.5-7B" },
 ];
@@ -54,7 +60,10 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        const error = await response.json().catch(() => null);
+        const error = (await response.json().catch(() => null)) as ChatErrorResponse | null;
+        if (typeof error?.remaining === "number") {
+          setRateLimitStatus(`${error.remaining} chats left today`);
+        }
         throw new Error(error?.error ?? "The chat request failed.");
       }
 
@@ -255,8 +264,11 @@ export default function Home() {
             <article className="message assistant" aria-label="Qwen is thinking">
               <span className="message-role">{currentModelLabel}</span>
               <div className="bubble">
-                <div className="typing-indicator" aria-label="Thinking">
-                  <span /><span /><span />
+                <div className="thinking-state">
+                  <div className="typing-indicator" aria-label="Waking GPU">
+                    <span /><span /><span />
+                  </div>
+                  <p>Waking GPU. First response can take a minute. Stays warm for about 5 minutes.</p>
                 </div>
               </div>
             </article>
