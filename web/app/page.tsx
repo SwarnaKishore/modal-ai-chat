@@ -41,8 +41,41 @@ export default function Home() {
         throw new Error(error?.error ?? "The chat request failed.");
       }
 
-      const data = await response.json();
-      setMessages([...nextMessages, { role: "assistant", content: data.content }]);
+      if (!response.body) {
+        throw new Error("The chat response did not include a stream.");
+      }
+
+      const assistantMessage: ChatMessage = { role: "assistant", content: "" };
+      setMessages([...nextMessages, assistantMessage]);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let assistantContent = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) continue;
+
+          const payload = trimmed.slice(5).trim();
+          if (payload === "[DONE]") break;
+
+          const chunk = JSON.parse(payload);
+          const token = chunk?.choices?.[0]?.delta?.content;
+          if (typeof token !== "string") continue;
+
+          assistantContent += token;
+          setMessages([...nextMessages, { role: "assistant", content: assistantContent }]);
+        }
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Something went wrong.";
       setMessages([...nextMessages, { role: "assistant", content: message }]);
@@ -75,7 +108,7 @@ export default function Home() {
               <p>{message.content}</p>
             </article>
           ))}
-          {isLoading && (
+          {isLoading && messages[messages.length - 1]?.role !== "assistant" && (
             <article className="message assistant">
               <p>Thinking...</p>
             </article>

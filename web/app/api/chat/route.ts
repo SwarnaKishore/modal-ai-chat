@@ -103,6 +103,7 @@ export async function POST(request: NextRequest) {
       ],
       temperature: 0.7,
       max_tokens: 800,
+      stream: true,
     }),
   });
 
@@ -114,19 +115,18 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const data = await response.json();
-  const content = data?.choices?.[0]?.message?.content;
-
-  if (typeof content !== "string") {
-    return NextResponse.json({ error: "Modal returned an unexpected response." }, { status: 502 });
+  if (!response.body) {
+    return NextResponse.json({ error: "Modal returned an empty stream." }, { status: 502 });
   }
 
-  return NextResponse.json({
-    content,
-    rateLimit: {
-      limit: DAILY_MESSAGE_LIMIT,
-      remaining: limit.remaining,
-      resetAt: new Date(limit.resetAt).toISOString(),
+  return new Response(response.body, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-RateLimit-Limit": String(DAILY_MESSAGE_LIMIT),
+      "X-RateLimit-Remaining": String(limit.remaining),
+      "X-RateLimit-Reset": new Date(limit.resetAt).toISOString(),
     },
   });
 }
