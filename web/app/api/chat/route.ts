@@ -1,132 +1,134 @@
+// app/api/chat/route.ts
 import { NextRequest, NextResponse } from "next/server";
 
+// ── Rate limiting (simple in-memory store) ────────────────────────────────
+// Replace with Redis / Upstash for production multi-instance deployments.
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+const DAILY_LIMIT = 3;
+
+function checkRateLimit(ip: string): { allowed: boolean; remaining: number; resetAt: number } {
+  const now = Date.now();
+  const midnight = new Date();
+  midnight.setHours(24, 0, 0, 0);
+  const resetAt = midnight.getTime();
+
+  const entry = rateLimitMap.get(ip);
+
+  if (!entry || now >= entry.resetAt) {
+    rateLimitMap.set(ip, { count: 1, resetAt });
+    return { allowed: true, remaining: DAILY_LIMIT - 1, resetAt };
+  }
+
+  if (entry.count >= DAILY_LIMIT) {
+    return { allowed: false, remaining: 0, resetAt: entry.resetAt };
+  }
+
+  entry.count += 1;
+  return { allowed: true, remaining: DAILY_LIMIT - entry.count, resetAt: entry.resetAt };
+}
+
+// ── Types ─────────────────────────────────────────────────────────────────
 type ChatMessage = {
-  role: "system" | "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: string;
 };
 
-type DailyLimitEntry = {
-  count: number;
-  resetAt: number;
+type RequestBody = {
+  messages: ChatMessage[];
+  model?: string;
+  systemPrompt?: string;
 };
 
-export const runtime = "nodejs";
+// ── Handler ───────────────────────────────────────────────────────────────
+export async function POST(req: NextRequest) {
+  // 1. Rate limit
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+  const { allowed, remaining, resetAt } = checkRateLimit(ip);
 
-const DAILY_MESSAGE_LIMIT = 3;
-const DAY_IN_MS = 24 * 60 * 60 * 1000;
-const ipDailyLimits = new Map<string, DailyLimitEntry>();
-
-function getClientIp(request: NextRequest) {
-  const forwardedFor = request.headers.get("x-forwarded-for");
-  if (forwardedFor) return forwardedFor.split(",")[0]?.trim() ?? "unknown";
-
-  const realIp = request.headers.get("x-real-ip");
-  if (realIp) return realIp;
-
-  return "unknown";
-}
-
-function checkDailyLimit(ip: string) {
-  const now = Date.now();
-  const current = ipDailyLimits.get(ip);
-
-  if (!current || current.resetAt <= now) {
-    const next = { count: 1, resetAt: now + DAY_IN_MS };
-    ipDailyLimits.set(ip, next);
-    return { allowed: true, remaining: DAILY_MESSAGE_LIMIT - next.count, resetAt: next.resetAt };
-  }
-
-  if (current.count >= DAILY_MESSAGE_LIMIT) {
-    return { allowed: false, remaining: 0, resetAt: current.resetAt };
-  }
-
-  current.count += 1;
-  return { allowed: true, remaining: DAILY_MESSAGE_LIMIT - current.count, resetAt: current.resetAt };
-}
-
-export async function POST(request: NextRequest) {
-  const modalBaseUrl = process.env.MODAL_BASE_URL;
-  const modalApiKey = process.env.MODAL_API_KEY;
-  const model = process.env.QWEN_MODEL ?? "Qwen/Qwen2.5-7B-Instruct";
-
-  if (!modalBaseUrl || !modalApiKey) {
+  if (!allowed) {
     return NextResponse.json(
-      { error: "Missing MODAL_BASE_URL or MODAL_API_KEY on the server." },
-      { status: 500 },
+      { error: "Daily message limit reached. Come back tomorrow." },
+      { status: 429 }
     );
   }
 
-  const body = await request.json().catch(() => null);
-  const messages = body?.messages as ChatMessage[] | undefined;
+  // 2. Parse body
+  let body: RequestBody;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
+  }
+
+  const { messages, model, systemPrompt } = body;
 
   if (!Array.isArray(messages) || messages.length === 0) {
-    return NextResponse.json({ error: "Expected a non-empty messages array." }, { status: 400 });
+    return NextResponse.json({ error: "Messages array is required." }, { status: 400 });
   }
 
-  const forwardedMessages = messages.filter((message, index) => {
-    if (index === 0 && message.role === "assistant") return false;
-    return message.role === "user" || message.role === "assistant";
-  });
+  // 3. Build the messages array for vLLM
+  //    Prepend system prompt if provided, ensuring no duplicate system messages.
+  const systemMessage: ChatMessage = {
+    role: "system",
+    content: systemPrompt?.trim() || "You are a helpful AI assistant. Be concise and accurate.",
+  };
 
-  if (!forwardedMessages.some((message) => message.role === "user")) {
-    return NextResponse.json({ error: "Expected at least one user message." }, { status: 400 });
-  }
+  const filteredMessages = messages.filter((m) => m.role !== "system");
+  const vllmMessages = [systemMessage, ...filteredMessages];
 
-  const limit = checkDailyLimit(getClientIp(request));
+  // 4. Forward to Modal/vLLM
+  const modalUrl = process.env.MODAL_BASE_URL;
+  const modalApiKey = process.env.MODAL_API_KEY;
 
-  if (!limit.allowed) {
+  if (!modalUrl || !modalApiKey) {
     return NextResponse.json(
-      {
-        error: "Daily message limit reached.",
-        limit: DAILY_MESSAGE_LIMIT,
-        remaining: limit.remaining,
-        resetAt: new Date(limit.resetAt).toISOString(),
+      { error: "MODAL_BASE_URL or MODAL_API_KEY is not configured." },
+      { status: 500 }
+    );
+  }
+
+  let upstreamResponse: Response;
+  try {
+    upstreamResponse = await fetch(`${modalUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${modalApiKey}`,
       },
-      { status: 429 },
-    );
-  }
-
-  const response = await fetch(`${modalBaseUrl.replace(/\/$/, "")}/v1/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${modalApiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        {
-          role: "system",
-          content: "You are a concise, helpful assistant.",
-        },
-        ...forwardedMessages,
-      ],
-      temperature: 0.7,
-      max_tokens: 800,
-    }),
-  });
-
-  if (!response.ok) {
-    const detail = await response.text();
+      body: JSON.stringify({
+        model: model ?? "Qwen/Qwen2.5-7B-Instruct",
+        messages: vllmMessages,
+        stream: true,
+        max_tokens: 1024,
+        temperature: 0.7,
+      }),
+    });
+  } catch (err) {
+    console.error("Modal upstream error:", err);
     return NextResponse.json(
-      { error: "Modal request failed.", detail },
-      { status: response.status },
+      { error: "Could not reach the inference server." },
+      { status: 502 }
     );
   }
 
-  const data = await response.json();
-  const content = data?.choices?.[0]?.message?.content;
-
-  if (typeof content !== "string") {
-    return NextResponse.json({ error: "Modal returned an unexpected response." }, { status: 502 });
+  if (!upstreamResponse.ok) {
+    const text = await upstreamResponse.text().catch(() => "");
+    console.error("Modal error response:", text);
+    return NextResponse.json(
+      { error: "Inference server returned an error." },
+      { status: upstreamResponse.status }
+    );
   }
 
-  return NextResponse.json({
-    content,
-    rateLimit: {
-      limit: DAILY_MESSAGE_LIMIT,
-      remaining: limit.remaining,
-      resetAt: new Date(limit.resetAt).toISOString(),
+  // 5. Stream response back with rate limit header
+  return new Response(upstreamResponse.body, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-RateLimit-Limit": String(DAILY_LIMIT),
+      "X-RateLimit-Remaining": String(remaining),
+      "X-RateLimit-Reset": new Date(resetAt).toISOString(),
     },
   });
 }
