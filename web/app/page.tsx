@@ -5,17 +5,20 @@ import { FormEvent, KeyboardEvent, useMemo, useState } from "react";
 type ChatMessage = {
   role: "user" | "assistant";
   content: string;
+  meta?: string;
 };
 
 export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: "assistant",
-      content: "Ask me something. I am routed through your Next.js API to Qwen on Modal.",
+      content: "Ask me anything. I’ll stream the response as it comes in.",
     },
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [rateLimitStatus, setRateLimitStatus] = useState("3 messages/day");
   const canSend = useMemo(() => input.trim().length > 0 && !isLoading, [input, isLoading]);
 
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
@@ -28,6 +31,7 @@ export default function Home() {
     setMessages(nextMessages);
     setInput("");
     setIsLoading(true);
+    const startedAt = performance.now();
 
     try {
       const response = await fetch("/api/chat", {
@@ -45,6 +49,9 @@ export default function Home() {
         throw new Error("The chat response did not include a stream.");
       }
 
+      const remaining = response.headers.get("X-RateLimit-Remaining");
+      if (remaining) setRateLimitStatus(`${remaining} messages left today`);
+
       const assistantMessage: ChatMessage = { role: "assistant", content: "" };
       setMessages([...nextMessages, assistantMessage]);
 
@@ -52,6 +59,7 @@ export default function Home() {
       const decoder = new TextDecoder();
       let buffer = "";
       let assistantContent = "";
+      let tokenCount = 0;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -73,9 +81,15 @@ export default function Home() {
           if (typeof token !== "string") continue;
 
           assistantContent += token;
+          tokenCount += 1;
           setMessages([...nextMessages, { role: "assistant", content: assistantContent }]);
         }
       }
+
+      const elapsedSeconds = (performance.now() - startedAt) / 1000;
+      const tokensPerSecond = tokenCount > 0 ? tokenCount / elapsedSeconds : 0;
+      const meta = `${elapsedSeconds.toFixed(1)}s · ${tokenCount} chunks · ${tokensPerSecond.toFixed(1)} chunks/s`;
+      setMessages([...nextMessages, { role: "assistant", content: assistantContent, meta }]);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Something went wrong.";
       setMessages([...nextMessages, { role: "assistant", content: message }]);
@@ -91,6 +105,12 @@ export default function Home() {
     event.currentTarget.form?.requestSubmit();
   }
 
+  async function copyMessage(content: string, index: number) {
+    await navigator.clipboard.writeText(content);
+    setCopiedIndex(index);
+    window.setTimeout(() => setCopiedIndex(null), 1400);
+  }
+
   return (
     <main className="shell">
       <section className="chat-panel" aria-label="Qwen chat">
@@ -99,18 +119,38 @@ export default function Home() {
             <p className="eyebrow">Modal + vLLM</p>
             <h1>Qwen Chat</h1>
           </div>
-          <span className="status">Server routed</span>
+          <div className="status-group">
+            <span className="status">Streaming</span>
+            <span className="usage">{rateLimitStatus}</span>
+          </div>
         </header>
 
         <div className="messages">
           {messages.map((message, index) => (
             <article className={`message ${message.role}`} key={`${message.role}-${index}`}>
-              <p>{message.content}</p>
+              <div className="message-body">
+                <p>{message.content}</p>
+                {message.role === "assistant" && message.content && (
+                  <button
+                    aria-label="Copy assistant message"
+                    className="copy-button"
+                    onClick={() => copyMessage(message.content, index)}
+                    type="button"
+                  >
+                    {copiedIndex === index ? "Copied" : "Copy"}
+                  </button>
+                )}
+              </div>
+              {message.meta && <p className="message-meta">{message.meta}</p>}
             </article>
           ))}
           {isLoading && messages[messages.length - 1]?.role !== "assistant" && (
             <article className="message assistant">
-              <p>Thinking...</p>
+              <div className="typing-indicator" aria-label="Qwen is thinking">
+                <span />
+                <span />
+                <span />
+              </div>
             </article>
           )}
         </div>
