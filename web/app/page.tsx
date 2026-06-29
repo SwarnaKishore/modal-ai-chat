@@ -79,7 +79,7 @@ export default function Home() {
       const decoder = new TextDecoder();
       let buffer = "";
       let assistantContent = "";
-      let tokenCount = 0;
+      let firstResponseAt: number | null = null;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -100,14 +100,16 @@ export default function Home() {
           if (typeof token !== "string") continue;
 
           assistantContent += token;
-          tokenCount += 1;
+          firstResponseAt ??= performance.now();
           setMessages([...history, { role: "assistant", content: assistantContent }]);
         }
       }
 
       const elapsedSeconds = (performance.now() - startedAt) / 1000;
-      const tokPerSec = tokenCount > 0 ? (tokenCount / elapsedSeconds).toFixed(1) : "0";
-      const meta = `${elapsedSeconds.toFixed(1)}s · ${tokenCount} chunks · ${tokPerSec} chunks/s`;
+      const firstResponseSeconds = firstResponseAt
+        ? (firstResponseAt - startedAt) / 1000
+        : elapsedSeconds;
+      const meta = `Started responding in ${firstResponseSeconds.toFixed(1)}s · completed in ${elapsedSeconds.toFixed(1)}s`;
       setMessages([...history, { role: "assistant", content: assistantContent, meta }]);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Something went wrong.";
