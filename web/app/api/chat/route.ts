@@ -6,11 +6,34 @@ import { NextRequest, NextResponse } from "next/server";
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const DAILY_LIMIT = 3;
 
-function checkRateLimit(ip: string): { allowed: boolean; remaining: number; resetAt: number } {
-  const now = Date.now();
+function getClientIp(req: NextRequest) {
+  return req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+}
+
+function getNextResetAt() {
   const midnight = new Date();
   midnight.setHours(24, 0, 0, 0);
-  const resetAt = midnight.getTime();
+  return midnight.getTime();
+}
+
+function getRateLimitStatus(ip: string): { limit: number; remaining: number; resetAt: number } {
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip);
+
+  if (!entry || now >= entry.resetAt) {
+    return { limit: DAILY_LIMIT, remaining: DAILY_LIMIT, resetAt: getNextResetAt() };
+  }
+
+  return {
+    limit: DAILY_LIMIT,
+    remaining: Math.max(DAILY_LIMIT - entry.count, 0),
+    resetAt: entry.resetAt,
+  };
+}
+
+function checkRateLimit(ip: string): { allowed: boolean; remaining: number; resetAt: number } {
+  const now = Date.now();
+  const resetAt = getNextResetAt();
 
   const entry = rateLimitMap.get(ip);
 
@@ -25,6 +48,16 @@ function checkRateLimit(ip: string): { allowed: boolean; remaining: number; rese
 
   entry.count += 1;
   return { allowed: true, remaining: DAILY_LIMIT - entry.count, resetAt: entry.resetAt };
+}
+
+export async function GET(req: NextRequest) {
+  const status = getRateLimitStatus(getClientIp(req));
+
+  return NextResponse.json({
+    limit: status.limit,
+    remaining: status.remaining,
+    resetAt: new Date(status.resetAt).toISOString(),
+  });
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -42,7 +75,7 @@ type RequestBody = {
 // ── Handler ───────────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   // 1. Rate limit
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+  const ip = getClientIp(req);
   const { allowed, remaining, resetAt } = checkRateLimit(ip);
 
   if (!allowed) {
