@@ -1,10 +1,19 @@
 // app/api/chat/route.ts
+import { Redis } from "@upstash/redis";
 import { NextRequest, NextResponse } from "next/server";
 
 // ── Rate limiting (simple in-memory store) ────────────────────────────────
-// Replace with Redis / Upstash for production multi-instance deployments.
+// Uses Upstash Redis when configured, with an in-memory fallback for local dev.
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const DAILY_LIMIT = 3;
+
+const redis =
+  process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
+    ? new Redis({
+        url: process.env.UPSTASH_REDIS_REST_URL,
+        token: process.env.UPSTASH_REDIS_REST_TOKEN,
+      })
+    : null;
 
 function getClientIp(req: NextRequest) {
   return req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
@@ -16,7 +25,16 @@ function getNextResetAt() {
   return midnight.getTime();
 }
 
-function getRateLimitStatus(ip: string): { limit: number; remaining: number; resetAt: number } {
+function getSecondsUntilReset(resetAt: number) {
+  return Math.max(Math.ceil((resetAt - Date.now()) / 1000), 1);
+}
+
+function getRateLimitKey(ip: string) {
+  const today = new Date().toISOString().slice(0, 10);
+  return `rate-limit:chat:${ip}:${today}`;
+}
+
+function getMemoryRateLimitStatus(ip: string): { limit: number; remaining: number; resetAt: number } {
   const now = Date.now();
   const entry = rateLimitMap.get(ip);
 
@@ -31,7 +49,7 @@ function getRateLimitStatus(ip: string): { limit: number; remaining: number; res
   };
 }
 
-function checkRateLimit(ip: string): { allowed: boolean; remaining: number; resetAt: number } {
+function checkMemoryRateLimit(ip: string): { allowed: boolean; remaining: number; resetAt: number } {
   const now = Date.now();
   const resetAt = getNextResetAt();
 
@@ -50,8 +68,40 @@ function checkRateLimit(ip: string): { allowed: boolean; remaining: number; rese
   return { allowed: true, remaining: DAILY_LIMIT - entry.count, resetAt: entry.resetAt };
 }
 
+async function getRateLimitStatus(ip: string) {
+  if (!redis) return getMemoryRateLimitStatus(ip);
+
+  const resetAt = getNextResetAt();
+  const key = getRateLimitKey(ip);
+  const used = Number((await redis.get<number>(key)) ?? 0);
+
+  return {
+    limit: DAILY_LIMIT,
+    remaining: Math.max(DAILY_LIMIT - used, 0),
+    resetAt,
+  };
+}
+
+async function checkRateLimit(ip: string) {
+  if (!redis) return checkMemoryRateLimit(ip);
+
+  const resetAt = getNextResetAt();
+  const key = getRateLimitKey(ip);
+  const used = await redis.incr(key);
+
+  if (used === 1) {
+    await redis.expire(key, getSecondsUntilReset(resetAt));
+  }
+
+  return {
+    allowed: used <= DAILY_LIMIT,
+    remaining: Math.max(DAILY_LIMIT - used, 0),
+    resetAt,
+  };
+}
+
 export async function GET(req: NextRequest) {
-  const status = getRateLimitStatus(getClientIp(req));
+  const status = await getRateLimitStatus(getClientIp(req));
 
   return NextResponse.json({
     limit: status.limit,
@@ -76,7 +126,7 @@ type RequestBody = {
 export async function POST(req: NextRequest) {
   // 1. Rate limit
   const ip = getClientIp(req);
-  const { allowed, remaining, resetAt } = checkRateLimit(ip);
+  const { allowed, remaining, resetAt } = await checkRateLimit(ip);
 
   if (!allowed) {
     return NextResponse.json(
