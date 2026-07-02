@@ -1,16 +1,57 @@
 // app/api/chat/route.ts
+import { Redis } from "@upstash/redis";
 import { NextRequest, NextResponse } from "next/server";
 
 // ── Rate limiting (simple in-memory store) ────────────────────────────────
-// Replace with Redis / Upstash for production multi-instance deployments.
+// Uses Upstash Redis when configured, with an in-memory fallback for local dev.
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const DAILY_LIMIT = 3;
 
-function checkRateLimit(ip: string): { allowed: boolean; remaining: number; resetAt: number } {
-  const now = Date.now();
+const redis =
+  process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
+    ? new Redis({
+        url: process.env.UPSTASH_REDIS_REST_URL,
+        token: process.env.UPSTASH_REDIS_REST_TOKEN,
+      })
+    : null;
+
+function getClientIp(req: NextRequest) {
+  return req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+}
+
+function getNextResetAt() {
   const midnight = new Date();
   midnight.setHours(24, 0, 0, 0);
-  const resetAt = midnight.getTime();
+  return midnight.getTime();
+}
+
+function getSecondsUntilReset(resetAt: number) {
+  return Math.max(Math.ceil((resetAt - Date.now()) / 1000), 1);
+}
+
+function getRateLimitKey(ip: string) {
+  const today = new Date().toISOString().slice(0, 10);
+  return `rate-limit:chat:${ip}:${today}`;
+}
+
+function getMemoryRateLimitStatus(ip: string): { limit: number; remaining: number; resetAt: number } {
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip);
+
+  if (!entry || now >= entry.resetAt) {
+    return { limit: DAILY_LIMIT, remaining: DAILY_LIMIT, resetAt: getNextResetAt() };
+  }
+
+  return {
+    limit: DAILY_LIMIT,
+    remaining: Math.max(DAILY_LIMIT - entry.count, 0),
+    resetAt: entry.resetAt,
+  };
+}
+
+function checkMemoryRateLimit(ip: string): { allowed: boolean; remaining: number; resetAt: number } {
+  const now = Date.now();
+  const resetAt = getNextResetAt();
 
   const entry = rateLimitMap.get(ip);
 
@@ -25,6 +66,48 @@ function checkRateLimit(ip: string): { allowed: boolean; remaining: number; rese
 
   entry.count += 1;
   return { allowed: true, remaining: DAILY_LIMIT - entry.count, resetAt: entry.resetAt };
+}
+
+async function getRateLimitStatus(ip: string) {
+  if (!redis) return getMemoryRateLimitStatus(ip);
+
+  const resetAt = getNextResetAt();
+  const key = getRateLimitKey(ip);
+  const used = Number((await redis.get<number>(key)) ?? 0);
+
+  return {
+    limit: DAILY_LIMIT,
+    remaining: Math.max(DAILY_LIMIT - used, 0),
+    resetAt,
+  };
+}
+
+async function checkRateLimit(ip: string) {
+  if (!redis) return checkMemoryRateLimit(ip);
+
+  const resetAt = getNextResetAt();
+  const key = getRateLimitKey(ip);
+  const used = await redis.incr(key);
+
+  if (used === 1) {
+    await redis.expire(key, getSecondsUntilReset(resetAt));
+  }
+
+  return {
+    allowed: used <= DAILY_LIMIT,
+    remaining: Math.max(DAILY_LIMIT - used, 0),
+    resetAt,
+  };
+}
+
+export async function GET(req: NextRequest) {
+  const status = await getRateLimitStatus(getClientIp(req));
+
+  return NextResponse.json({
+    limit: status.limit,
+    remaining: status.remaining,
+    resetAt: new Date(status.resetAt).toISOString(),
+  });
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -42,13 +125,25 @@ type RequestBody = {
 // ── Handler ───────────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   // 1. Rate limit
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
-  const { allowed, remaining, resetAt } = checkRateLimit(ip);
+  const ip = getClientIp(req);
+  const { allowed, remaining, resetAt } = await checkRateLimit(ip);
 
   if (!allowed) {
     return NextResponse.json(
-      { error: "Daily message limit reached. Come back tomorrow." },
-      { status: 429 }
+      {
+        error: "You’ve used today’s 3 chats. Try again tomorrow.",
+        limit: DAILY_LIMIT,
+        remaining,
+        resetAt: new Date(resetAt).toISOString(),
+      },
+      {
+        status: 429,
+        headers: {
+          "X-RateLimit-Limit": String(DAILY_LIMIT),
+          "X-RateLimit-Remaining": String(remaining),
+          "X-RateLimit-Reset": new Date(resetAt).toISOString(),
+        },
+      }
     );
   }
 
@@ -106,7 +201,7 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     console.error("Modal upstream error:", err);
     return NextResponse.json(
-      { error: "Could not reach the inference server." },
+      { error: "The model server is waking up or temporarily unavailable. Please try again in a moment." },
       { status: 502 }
     );
   }
@@ -114,8 +209,18 @@ export async function POST(req: NextRequest) {
   if (!upstreamResponse.ok) {
     const text = await upstreamResponse.text().catch(() => "");
     console.error("Modal error response:", text);
+
+    const errorMessage =
+      upstreamResponse.status === 401 || upstreamResponse.status === 403
+        ? "The model server rejected this request. Please check the Modal API key configuration."
+        : upstreamResponse.status === 429
+          ? "The model server is busy right now. Please try again in a moment."
+          : upstreamResponse.status >= 500
+            ? "The model server is warming up or temporarily unavailable. Please try again shortly."
+            : "The model server could not complete this request. Please try again.";
+
     return NextResponse.json(
-      { error: "Inference server returned an error." },
+      { error: errorMessage },
       { status: upstreamResponse.status }
     );
   }

@@ -8,11 +8,25 @@ type ChatMessage = {
   meta?: string;
 };
 
+type ChatErrorResponse = {
+  error?: string;
+  remaining?: number;
+  resetAt?: string;
+};
+
+type RateLimitResponse = {
+  remaining?: number;
+};
+
 const MODELS = [
   { id: "Qwen/Qwen2.5-7B-Instruct", label: "Qwen2.5-7B" },
 ];
 
 const DEFAULT_SYSTEM = "You are a helpful AI assistant. Be concise and accurate.";
+
+function formatRateLimitStatus(remaining: number) {
+  return `${remaining} ${remaining === 1 ? "chat" : "chats"} left today`;
+}
 
 export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -38,6 +52,20 @@ export default function Home() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
 
+  useEffect(() => {
+    async function loadUsage() {
+      const response = await fetch("/api/chat");
+      if (!response.ok) return;
+
+      const usage = (await response.json().catch(() => null)) as RateLimitResponse | null;
+      if (typeof usage?.remaining === "number") {
+        setRateLimitStatus(formatRateLimitStatus(usage.remaining));
+      }
+    }
+
+    void loadUsage();
+  }, []);
+
   async function runInference(history: ChatMessage[]) {
     setIsLoading(true);
     const startedAt = performance.now();
@@ -54,14 +82,17 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        const error = await response.json().catch(() => null);
+        const error = (await response.json().catch(() => null)) as ChatErrorResponse | null;
+        if (typeof error?.remaining === "number") {
+          setRateLimitStatus(formatRateLimitStatus(error.remaining));
+        }
         throw new Error(error?.error ?? "The chat request failed.");
       }
 
       if (!response.body) throw new Error("No stream in response.");
 
       const remaining = response.headers.get("X-RateLimit-Remaining");
-      if (remaining) setRateLimitStatus(`${remaining} chats left today`);
+      if (remaining) setRateLimitStatus(formatRateLimitStatus(Number(remaining)));
 
       const assistantMessage: ChatMessage = { role: "assistant", content: "" };
       setMessages([...history, assistantMessage]);
@@ -70,7 +101,7 @@ export default function Home() {
       const decoder = new TextDecoder();
       let buffer = "";
       let assistantContent = "";
-      let tokenCount = 0;
+      let firstResponseAt: number | null = null;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -91,14 +122,16 @@ export default function Home() {
           if (typeof token !== "string") continue;
 
           assistantContent += token;
-          tokenCount += 1;
+          firstResponseAt ??= performance.now();
           setMessages([...history, { role: "assistant", content: assistantContent }]);
         }
       }
 
       const elapsedSeconds = (performance.now() - startedAt) / 1000;
-      const tokPerSec = tokenCount > 0 ? (tokenCount / elapsedSeconds).toFixed(1) : "0";
-      const meta = `${elapsedSeconds.toFixed(1)}s · ${tokenCount} chunks · ${tokPerSec} chunks/s`;
+      const firstResponseSeconds = firstResponseAt
+        ? (firstResponseAt - startedAt) / 1000
+        : elapsedSeconds;
+      const meta = `Started responding in ${firstResponseSeconds.toFixed(1)}s · completed in ${elapsedSeconds.toFixed(1)}s`;
       setMessages([...history, { role: "assistant", content: assistantContent, meta }]);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Something went wrong.";
@@ -255,8 +288,11 @@ export default function Home() {
             <article className="message assistant" aria-label="Qwen is thinking">
               <span className="message-role">{currentModelLabel}</span>
               <div className="bubble">
-                <div className="typing-indicator" aria-label="Thinking">
-                  <span /><span /><span />
+                <div className="thinking-state">
+                  <div className="typing-indicator" aria-label="Waking GPU">
+                    <span /><span /><span />
+                  </div>
+                  <p>Waking GPU. First response can take a minute. Stays warm for about 5 minutes.</p>
                 </div>
               </div>
             </article>

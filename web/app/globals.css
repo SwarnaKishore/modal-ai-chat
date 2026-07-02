@@ -365,6 +365,18 @@ h1 {
   min-height: 22px;
 }
 
+.thinking-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.thinking-state p {
+  margin: 0;
+}
+
 .typing-indicator span {
   width: 7px;
   height: 7px;
