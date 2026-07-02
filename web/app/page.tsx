@@ -98,6 +98,7 @@ export default function Home() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const canSend = useMemo(() => input.trim().length > 0 && !isLoading, [input, isLoading]);
 
@@ -174,12 +175,16 @@ export default function Home() {
 
   async function runInference(history: ChatMessage[]) {
     setIsLoading(true);
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
     const startedAt = performance.now();
+    let assistantContent = "";
 
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: abortController.signal,
         body: JSON.stringify({
           messages: history,
           model: selectedModel,
@@ -206,7 +211,6 @@ export default function Home() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      let assistantContent = "";
       let firstResponseAt: number | null = null;
 
       while (true) {
@@ -240,9 +244,24 @@ export default function Home() {
       const meta = `Started responding in ${firstResponseSeconds.toFixed(1)}s · completed in ${elapsedSeconds.toFixed(1)}s`;
       setMessages([...history, { role: "assistant", content: assistantContent, meta }]);
     } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        const elapsedSeconds = (performance.now() - startedAt) / 1000;
+        const content = assistantContent || "Response stopped before text was received.";
+        setMessages([
+          ...history,
+          {
+            role: "assistant",
+            content,
+            meta: `Stopped by user after ${elapsedSeconds.toFixed(1)}s`,
+          },
+        ]);
+        return;
+      }
+
       const message = error instanceof Error ? error.message : "Something went wrong.";
       setMessages([...history, { role: "assistant", content: `⚠ ${message}` }]);
     } finally {
+      abortControllerRef.current = null;
       setIsLoading(false);
     }
   }
@@ -331,6 +350,10 @@ export default function Home() {
     setConversations(nextConversations);
     saveConversations(nextConversations);
     openConversation(conversation);
+  }
+
+  function stopGenerating() {
+    abortControllerRef.current?.abort();
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -521,7 +544,7 @@ export default function Home() {
               </div>
 
               {/* Actions — only on non-empty assistant messages */}
-              {message.role === "assistant" && message.content && !message.content.startsWith("⚠") && (
+              {message.role === "assistant" && index > 0 && message.content && !message.content.startsWith("⚠") && (
                 <div className="bubble-actions">
                   <button
                     type="button"
@@ -583,9 +606,15 @@ export default function Home() {
               rows={3}
               disabled={isLoading}
             />
-            <button type="submit" className="send-btn" disabled={!canSend} aria-label="Send">
-              ➤
-            </button>
+            {isLoading ? (
+              <button type="button" className="stop-btn" onClick={stopGenerating} aria-label="Stop generating">
+                ■
+              </button>
+            ) : (
+              <button type="submit" className="send-btn" disabled={!canSend} aria-label="Send">
+                ➤
+              </button>
+            )}
           </div>
           <div className="composer-footer">
             <span className="composer-hint">{currentModelLabel} · Modal · vLLM</span>

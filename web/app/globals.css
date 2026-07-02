@@ -694,13 +694,13 @@ h1 {
   cursor: not-allowed;
 }
 
-.send-btn {
+.send-btn,
+.stop-btn {
   width: 42px;
   height: 42px;
   flex-shrink: 0;
   border: none;
   border-radius: 9px;
-  background: var(--primary);
   color: white;
   cursor: pointer;
   font-size: 16px;
@@ -710,11 +710,24 @@ h1 {
   transition: background 0.12s, transform 0.1s;
 }
 
+.send-btn {
+  background: var(--primary);
+}
+
 .send-btn:hover:not(:disabled) {
   background: var(--primary-strong);
 }
 
-.send-btn:active:not(:disabled) {
+.stop-btn {
+  background: #be123c;
+}
+
+.stop-btn:hover {
+  background: #9f1239;
+}
+
+.send-btn:active:not(:disabled),
+.stop-btn:active {
   transform: scale(0.96);
 }
 
