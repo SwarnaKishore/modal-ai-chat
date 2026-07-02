@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, KeyboardEvent, useEffect, useRef, useMemo, useState } from "react";
+import { FormEvent, isValidElement, KeyboardEvent, ReactNode, useEffect, useRef, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -30,6 +30,13 @@ function formatRateLimitStatus(remaining: number) {
   return `${remaining} ${remaining === 1 ? "chat" : "chats"} left today`;
 }
 
+function getNodeText(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(getNodeText).join("");
+  if (isValidElement<{ children?: ReactNode }>(node)) return getNodeText(node.props.children);
+  return "";
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -40,6 +47,7 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
   const [rateLimitStatus, setRateLimitStatus] = useState("3 chats left today");
   const [selectedModel, setSelectedModel] = useState(MODELS[0].id);
   const [systemPrompt, setSystemPrompt] = useState(DEFAULT_SYSTEM);
@@ -175,6 +183,12 @@ export default function Home() {
     window.setTimeout(() => setCopiedIndex(null), 1400);
   }
 
+  async function copyCodeBlock(content: string, id: string) {
+    await navigator.clipboard.writeText(content);
+    setCopiedCodeId(id);
+    window.setTimeout(() => setCopiedCodeId(null), 1400);
+  }
+
   const currentModelLabel = MODELS.find((m) => m.id === selectedModel)?.label ?? selectedModel;
 
   return (
@@ -251,7 +265,37 @@ export default function Home() {
 
               <div className="bubble">
                 {message.role === "assistant" ? (
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      pre({ children }) {
+                        const codeText = getNodeText(children).replace(/\n$/, "");
+                        const child = Array.isArray(children) ? children[0] : children;
+                        const className = isValidElement<{ className?: string }>(child)
+                          ? child.props.className ?? ""
+                          : "";
+                        const language = /language-(\S+)/.exec(className)?.[1] ?? "text";
+                        const codeId = `${index}-${codeText.length}-${codeText.slice(0, 24)}`;
+
+                        return (
+                          <div className="code-block">
+                            <div className="code-block-header">
+                              <span>{language}</span>
+                              <button
+                                type="button"
+                                className="code-copy-btn"
+                                onClick={() => copyCodeBlock(codeText, codeId)}
+                                aria-label={`Copy ${language} code`}
+                              >
+                                {copiedCodeId === codeId ? "Copied" : "Copy"}
+                              </button>
+                            </div>
+                            <pre>{children}</pre>
+                          </div>
+                        );
+                      },
+                    }}
+                  >
                     {message.content}
                   </ReactMarkdown>
                 ) : (

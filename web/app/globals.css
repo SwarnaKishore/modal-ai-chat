@@ -341,11 +341,12 @@ h1 {
 }
 
 .bubble pre {
-  margin: 10px 0;
+  margin: 0;
   padding: 10px 12px;
   overflow-x: auto;
-  border: 1px solid #d6dee8;
-  border-radius: 8px;
+  border: 0;
+  border-top: 1px solid #d6dee8;
+  border-radius: 0 0 8px 8px;
   background: #f8fafc;
 }
 
@@ -354,6 +355,43 @@ h1 {
   border: 0;
   background: transparent;
   white-space: pre;
+}
+
+.code-block {
+  margin: 10px 0;
+  overflow: hidden;
+  border: 1px solid #d6dee8;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 8px 6px 10px;
+  color: #64748b;
+  font-size: 11px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  background: #eef2f7;
+}
+
+.code-copy-btn {
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+  padding: 2px 7px;
+  background: #ffffff;
+  color: #475569;
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.code-copy-btn:hover {
+  border-color: #94a3b8;
+  background: #f8fafc;
+  color: #1f2937;
 }
 
 .bubble a {
