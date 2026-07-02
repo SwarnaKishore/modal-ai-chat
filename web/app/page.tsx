@@ -82,6 +82,10 @@ function saveConversations(conversations: Conversation[]) {
   }
 }
 
+function isAbortError(error: unknown) {
+  return error instanceof Error && (error.name === "AbortError" || error.message.toLowerCase().includes("abort"));
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE]);
   const [input, setInput] = useState("");
@@ -244,7 +248,7 @@ export default function Home() {
       const meta = `Started responding in ${firstResponseSeconds.toFixed(1)}s · completed in ${elapsedSeconds.toFixed(1)}s`;
       setMessages([...history, { role: "assistant", content: assistantContent, meta }]);
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
+      if (abortController.signal.aborted || isAbortError(error)) {
         const elapsedSeconds = (performance.now() - startedAt) / 1000;
         const content = assistantContent || "Response stopped before text was received.";
         setMessages([
