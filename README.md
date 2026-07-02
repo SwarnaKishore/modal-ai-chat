@@ -16,9 +16,10 @@ Screenshots will be added after the UI is finalized.
 - Modal GPU deployment with vLLM's OpenAI-compatible chat API.
 - Persistent daily per-IP rate limiting with Upstash Redis.
 - Cold-start-aware UX for serverless GPU inference.
-- System prompt editing for experimenting with model behavior.
+- Settings drawer for system prompt, temperature, and max response length.
 - Markdown rendering with copyable code blocks.
-- Local browser chat history with a ChatGPT-style sidebar.
+- Local browser chat history with a ChatGPT-style sidebar, delete, and clear controls.
+- User-controlled streaming cancellation with partial response preservation.
 - Response timing that shows when the model started responding and when it finished.
 
 ## Architecture
@@ -48,6 +49,7 @@ Request flow:
 3. The API route forwards the request to Modal using the server-side API key.
 4. Modal runs vLLM on a GPU and streams tokens back.
 5. The browser renders the streamed response as Markdown.
+6. The user can stop generation from the browser, which aborts the active streaming request.
 
 ## Stack
 
@@ -76,15 +78,27 @@ web/
 ## Features
 
 - Streaming responses.
-- System prompt editor.
+- Stop generating control for active streams.
+- Settings drawer for system prompt, temperature, and max tokens.
 - Model selector UI with Qwen2.5-7B configured.
 - Markdown rendering for assistant responses.
 - Copy buttons for full responses and individual code blocks.
 - Retry action for the latest assistant response.
 - Sidebar conversation history stored in the browser.
+- Delete individual chats and clear local chat history.
 - Daily 3-message-per-IP limit backed by Upstash Redis in production.
 - Response timing display in plain language.
 - Cold-start message while the Modal GPU wakes up.
+
+## Generation Settings
+
+The settings drawer lets you tune each chat without changing backend code:
+
+- **System prompt** controls the assistant's behavior.
+- **Temperature** controls response variety. Lower values are more focused; higher values are more creative.
+- **Max tokens** caps response length. Lower values can reduce latency and GPU usage.
+
+The API route validates these values before forwarding them to vLLM.
 
 ## Cold Starts
 
