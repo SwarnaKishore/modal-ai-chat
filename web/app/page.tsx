@@ -74,6 +74,14 @@ function isBlankConversation(conversation: Pick<Conversation, "messages">) {
   return !conversation.messages.some((message) => message.role === "user" && message.content.trim());
 }
 
+function saveConversations(conversations: Conversation[]) {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations));
+  } catch {
+    // Keep the active chat usable even if browser storage is unavailable.
+  }
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE]);
   const [input, setInput] = useState("");
@@ -145,11 +153,7 @@ export default function Home() {
         ...currentConversations.filter((conversation) => conversation.id !== activeConversationId),
       ].slice(0, MAX_STORED_CONVERSATIONS);
 
-      try {
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextConversations));
-      } catch {
-        // Keep the active chat usable even if browser storage is unavailable.
-      }
+      saveConversations(nextConversations);
       return nextConversations;
     });
   }, [activeConversationId, hasLoadedConversations, messages, selectedModel, systemPrompt]);
@@ -290,6 +294,10 @@ export default function Home() {
     const conversation = conversations.find((item) => item.id === id);
     if (!conversation) return;
 
+    openConversation(conversation);
+  }
+
+  function openConversation(conversation: Conversation) {
     setActiveConversationId(conversation.id);
     setMessages(conversation.messages.length ? conversation.messages : [WELCOME_MESSAGE]);
     setSelectedModel(conversation.model || MODELS[0].id);
@@ -298,6 +306,31 @@ export default function Home() {
     setCopiedIndex(null);
     setCopiedCodeId(null);
     setShowSysPrompt(false);
+  }
+
+  function deleteConversation(id: string) {
+    if (isLoading) return;
+
+    const nextConversations = conversations.filter((conversation) => conversation.id !== id);
+    const fallbackConversation = createConversation(selectedModel);
+    const safeConversations = nextConversations.length ? nextConversations : [fallbackConversation];
+
+    setConversations(safeConversations);
+    saveConversations(safeConversations);
+
+    if (id === activeConversationId) {
+      openConversation(safeConversations[0]);
+    }
+  }
+
+  function clearHistory() {
+    if (isLoading) return;
+
+    const conversation = createConversation(selectedModel);
+    const nextConversations = [conversation];
+    setConversations(nextConversations);
+    saveConversations(nextConversations);
+    openConversation(conversation);
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -326,28 +359,53 @@ export default function Home() {
         <aside className="conversation-sidebar" aria-label="Conversation history">
           <div className="sidebar-header">
             <span>Chats</span>
-            <button
-              type="button"
-              className="new-chat-btn"
-              onClick={startNewChat}
-              disabled={isLoading}
-            >
-              + New chat
-            </button>
+            <div className="sidebar-actions">
+              <button
+                type="button"
+                className="new-chat-btn"
+                onClick={startNewChat}
+                disabled={isLoading}
+              >
+                + New chat
+              </button>
+              <button
+                type="button"
+                className="clear-history-btn"
+                onClick={clearHistory}
+                disabled={isLoading || conversations.length <= 1}
+                aria-label="Clear chat history"
+              >
+                Clear
+              </button>
+            </div>
           </div>
 
           <nav className="conversation-list" aria-label="Saved chats">
             {conversations.map((conversation) => (
-              <button
+              <div
                 key={conversation.id}
-                type="button"
                 className={`conversation-item ${conversation.id === activeConversationId ? "active" : ""}`}
-                onClick={() => selectConversation(conversation.id)}
-                disabled={isLoading}
-                aria-current={conversation.id === activeConversationId ? "page" : undefined}
               >
-                <span className="conversation-title">{conversation.title}</span>
-              </button>
+                <button
+                  type="button"
+                  className="conversation-open-btn"
+                  onClick={() => selectConversation(conversation.id)}
+                  disabled={isLoading}
+                  aria-current={conversation.id === activeConversationId ? "page" : undefined}
+                >
+                  <span className="conversation-title">{conversation.title}</span>
+                </button>
+                <button
+                  type="button"
+                  className="conversation-delete-btn"
+                  onClick={() => deleteConversation(conversation.id)}
+                  disabled={isLoading}
+                  aria-label={`Delete ${conversation.title}`}
+                  title="Delete chat"
+                >
+                  ×
+                </button>
+              </div>
             ))}
           </nav>
         </aside>
