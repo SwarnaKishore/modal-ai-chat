@@ -16,6 +16,8 @@ type Conversation = {
   messages: ChatMessage[];
   model: string;
   systemPrompt: string;
+  temperature: number;
+  maxTokens: number;
   updatedAt: number;
 };
 
@@ -34,6 +36,8 @@ const MODELS = [
 ];
 
 const DEFAULT_SYSTEM = "You are a helpful AI assistant. Be concise and accurate.";
+const DEFAULT_TEMPERATURE = 0.7;
+const DEFAULT_MAX_TOKENS = 1024;
 const STORAGE_KEY = "modal-ai-chat.conversations";
 const MAX_STORED_CONVERSATIONS = 8;
 const WELCOME_MESSAGE: ChatMessage = {
@@ -60,6 +64,8 @@ function createConversation(model: string): Conversation {
     messages: [WELCOME_MESSAGE],
     model,
     systemPrompt: DEFAULT_SYSTEM,
+    temperature: DEFAULT_TEMPERATURE,
+    maxTokens: DEFAULT_MAX_TOKENS,
     updatedAt: now,
   };
 }
@@ -82,6 +88,10 @@ function saveConversations(conversations: Conversation[]) {
   }
 }
 
+function isAbortError(error: unknown) {
+  return error instanceof Error && (error.name === "AbortError" || error.message.toLowerCase().includes("abort"));
+}
+
 export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE]);
   const [input, setInput] = useState("");
@@ -91,6 +101,8 @@ export default function Home() {
   const [rateLimitStatus, setRateLimitStatus] = useState("3 chats left today");
   const [selectedModel, setSelectedModel] = useState(MODELS[0].id);
   const [systemPrompt, setSystemPrompt] = useState(DEFAULT_SYSTEM);
+  const [temperature, setTemperature] = useState(DEFAULT_TEMPERATURE);
+  const [maxTokens, setMaxTokens] = useState(DEFAULT_MAX_TOKENS);
   const [showSysPrompt, setShowSysPrompt] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
@@ -98,6 +110,7 @@ export default function Home() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const canSend = useMemo(() => input.trim().length > 0 && !isLoading, [input, isLoading]);
 
@@ -128,6 +141,8 @@ export default function Home() {
       setMessages(initialConversation.messages.length ? initialConversation.messages : [WELCOME_MESSAGE]);
       setSelectedModel(initialConversation.model || MODELS[0].id);
       setSystemPrompt(initialConversation.systemPrompt || DEFAULT_SYSTEM);
+      setTemperature(initialConversation.temperature ?? DEFAULT_TEMPERATURE);
+      setMaxTokens(initialConversation.maxTokens ?? DEFAULT_MAX_TOKENS);
     } catch {
       setConversations([fallbackConversation]);
       setActiveConversationId(fallbackConversation.id);
@@ -146,6 +161,8 @@ export default function Home() {
         messages,
         model: selectedModel,
         systemPrompt,
+        temperature,
+        maxTokens,
         updatedAt: Date.now(),
       };
       const nextConversations = [
@@ -156,7 +173,7 @@ export default function Home() {
       saveConversations(nextConversations);
       return nextConversations;
     });
-  }, [activeConversationId, hasLoadedConversations, messages, selectedModel, systemPrompt]);
+  }, [activeConversationId, hasLoadedConversations, maxTokens, messages, selectedModel, systemPrompt, temperature]);
 
   useEffect(() => {
     async function loadUsage() {
@@ -174,16 +191,22 @@ export default function Home() {
 
   async function runInference(history: ChatMessage[]) {
     setIsLoading(true);
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
     const startedAt = performance.now();
+    let assistantContent = "";
 
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: abortController.signal,
         body: JSON.stringify({
           messages: history,
           model: selectedModel,
           systemPrompt: systemPrompt.trim() || DEFAULT_SYSTEM,
+          temperature,
+          maxTokens,
         }),
       });
 
@@ -206,7 +229,6 @@ export default function Home() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      let assistantContent = "";
       let firstResponseAt: number | null = null;
 
       while (true) {
@@ -240,9 +262,24 @@ export default function Home() {
       const meta = `Started responding in ${firstResponseSeconds.toFixed(1)}s · completed in ${elapsedSeconds.toFixed(1)}s`;
       setMessages([...history, { role: "assistant", content: assistantContent, meta }]);
     } catch (error) {
+      if (abortController.signal.aborted || isAbortError(error)) {
+        const elapsedSeconds = (performance.now() - startedAt) / 1000;
+        const content = assistantContent || "Stopped before the model started responding.";
+        setMessages([
+          ...history,
+          {
+            role: "assistant",
+            content,
+            meta: `Stopped by user after ${elapsedSeconds.toFixed(1)}s`,
+          },
+        ]);
+        return;
+      }
+
       const message = error instanceof Error ? error.message : "Something went wrong.";
       setMessages([...history, { role: "assistant", content: `⚠ ${message}` }]);
     } finally {
+      abortControllerRef.current = null;
       setIsLoading(false);
     }
   }
@@ -285,6 +322,8 @@ export default function Home() {
     setCopiedIndex(null);
     setCopiedCodeId(null);
     setSystemPrompt(DEFAULT_SYSTEM);
+    setTemperature(DEFAULT_TEMPERATURE);
+    setMaxTokens(DEFAULT_MAX_TOKENS);
     setShowSysPrompt(false);
   }
 
@@ -302,6 +341,8 @@ export default function Home() {
     setMessages(conversation.messages.length ? conversation.messages : [WELCOME_MESSAGE]);
     setSelectedModel(conversation.model || MODELS[0].id);
     setSystemPrompt(conversation.systemPrompt || DEFAULT_SYSTEM);
+    setTemperature(conversation.temperature ?? DEFAULT_TEMPERATURE);
+    setMaxTokens(conversation.maxTokens ?? DEFAULT_MAX_TOKENS);
     setInput("");
     setCopiedIndex(null);
     setCopiedCodeId(null);
@@ -331,6 +372,10 @@ export default function Home() {
     setConversations(nextConversations);
     saveConversations(nextConversations);
     openConversation(conversation);
+  }
+
+  function stopGenerating() {
+    abortControllerRef.current?.abort();
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -453,7 +498,7 @@ export default function Home() {
             onClick={() => setShowSysPrompt((v) => !v)}
             aria-expanded={showSysPrompt}
           >
-            ⚙ System prompt
+            ⚙ Settings
           </button>
         </div>
 
@@ -469,6 +514,35 @@ export default function Home() {
               placeholder="You are a helpful assistant…"
               rows={3}
             />
+            <div className="generation-settings">
+              <label className="generation-control" htmlFor="temperature">
+                <span>Temperature</span>
+                <strong>{temperature.toFixed(1)}</strong>
+                <input
+                  id="temperature"
+                  type="range"
+                  min="0"
+                  max="1.5"
+                  step="0.1"
+                  value={temperature}
+                  onChange={(e) => setTemperature(Number(e.target.value))}
+                  disabled={isLoading}
+                />
+              </label>
+              <label className="generation-control" htmlFor="max-tokens">
+                <span>Max tokens</span>
+                <input
+                  id="max-tokens"
+                  type="number"
+                  min="128"
+                  max="2048"
+                  step="128"
+                  value={maxTokens}
+                  onChange={(e) => setMaxTokens(Number(e.target.value))}
+                  disabled={isLoading}
+                />
+              </label>
+            </div>
           </div>
         )}
 
@@ -521,7 +595,7 @@ export default function Home() {
               </div>
 
               {/* Actions — only on non-empty assistant messages */}
-              {message.role === "assistant" && message.content && !message.content.startsWith("⚠") && (
+              {message.role === "assistant" && index > 0 && message.content && !message.content.startsWith("⚠") && (
                 <div className="bubble-actions">
                   <button
                     type="button"
@@ -583,9 +657,15 @@ export default function Home() {
               rows={3}
               disabled={isLoading}
             />
-            <button type="submit" className="send-btn" disabled={!canSend} aria-label="Send">
-              ➤
-            </button>
+            {isLoading ? (
+              <button type="button" className="stop-btn" onClick={stopGenerating} aria-label="Stop generating">
+                ■
+              </button>
+            ) : (
+              <button type="submit" className="send-btn" disabled={!canSend} aria-label="Send">
+                ➤
+              </button>
+            )}
           </div>
           <div className="composer-footer">
             <span className="composer-hint">{currentModelLabel} · Modal · vLLM</span>

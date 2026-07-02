@@ -120,7 +120,15 @@ type RequestBody = {
   messages: ChatMessage[];
   model?: string;
   systemPrompt?: string;
+  temperature?: number;
+  maxTokens?: number;
 };
+
+function clampNumber(value: unknown, fallback: number, min: number, max: number) {
+  const numericValue = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numericValue)) return fallback;
+  return Math.min(Math.max(numericValue, min), max);
+}
 
 // ── Handler ───────────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
@@ -155,7 +163,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
   }
 
-  const { messages, model, systemPrompt } = body;
+  const { messages, model, systemPrompt, temperature, maxTokens } = body;
 
   if (!Array.isArray(messages) || messages.length === 0) {
     return NextResponse.json({ error: "Messages array is required." }, { status: 400 });
@@ -170,6 +178,8 @@ export async function POST(req: NextRequest) {
 
   const filteredMessages = messages.filter((m) => m.role !== "system");
   const vllmMessages = [systemMessage, ...filteredMessages];
+  const safeTemperature = clampNumber(temperature, 0.7, 0, 1.5);
+  const safeMaxTokens = Math.round(clampNumber(maxTokens, 1024, 128, 2048));
 
   // 4. Forward to Modal/vLLM
   const modalUrl = process.env.MODAL_BASE_URL;
@@ -194,8 +204,8 @@ export async function POST(req: NextRequest) {
         model: model ?? "Qwen/Qwen2.5-7B-Instruct",
         messages: vllmMessages,
         stream: true,
-        max_tokens: 1024,
-        temperature: 0.7,
+        max_tokens: safeMaxTokens,
+        temperature: safeTemperature,
       }),
     });
   } catch (err) {
