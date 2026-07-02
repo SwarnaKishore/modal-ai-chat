@@ -264,7 +264,7 @@ export default function Home() {
     } catch (error) {
       if (abortController.signal.aborted || isAbortError(error)) {
         const elapsedSeconds = (performance.now() - startedAt) / 1000;
-        const content = assistantContent || "Stopped before the model started responding.";
+        const content = assistantContent || "Stopped while the model was still getting ready.";
         setMessages([
           ...history,
           {
@@ -635,7 +635,7 @@ export default function Home() {
                   <div className="typing-indicator" aria-label="Waking GPU">
                     <span /><span /><span />
                   </div>
-                  <p>Waking GPU. First response can take a few minutes. Stays warm for about 5 minutes.</p>
+                  <p>Waking GPU. First response can take a few minutes. Future replies are faster while it stays warm.</p>
                 </div>
               </div>
             </article>
