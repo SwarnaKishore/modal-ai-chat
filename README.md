@@ -2,15 +2,24 @@
 
 Self-hosted Qwen chat app using Modal for GPU inference, vLLM for model serving, and Next.js for the web UI.
 
+## Screenshots
+
+Screenshots will be added after the UI is finalized.
+
+- Main chat view with sidebar history.
+- Streaming response with Markdown and copyable code blocks.
+
 ## What This Demonstrates
 
 - Streaming chat responses from a self-hosted open model.
 - A server-side Next.js API proxy that keeps Modal credentials out of the browser.
 - Modal GPU deployment with vLLM's OpenAI-compatible chat API.
-- Daily per-IP rate limiting.
+- Persistent daily per-IP rate limiting with Upstash Redis.
 - Cold-start-aware UX for serverless GPU inference.
 - System prompt editing for experimenting with model behavior.
-- Basic response timing: when the model started responding and when it finished.
+- Markdown rendering with copyable code blocks.
+- Local browser chat history with a ChatGPT-style sidebar.
+- Response timing that shows when the model started responding and when it finished.
 
 ## Architecture
 
@@ -32,6 +41,14 @@ flowchart LR
 
 The browser only calls the Next.js API route. The Modal endpoint and API key stay on the server.
 
+Request flow:
+
+1. The browser sends chat messages to the Next.js `/api/chat` route.
+2. The API route checks the daily IP limit.
+3. The API route forwards the request to Modal using the server-side API key.
+4. Modal runs vLLM on a GPU and streams tokens back.
+5. The browser renders the streamed response as Markdown.
+
 ## Stack
 
 - **Next.js**: chat UI and `/api/chat` proxy.
@@ -39,6 +56,7 @@ The browser only calls the Next.js API route. The Modal endpoint and API key sta
 - **Modal**: runs the GPU-backed inference service.
 - **vLLM**: serves Qwen through an OpenAI-compatible `/v1/chat/completions` API.
 - **Qwen/Qwen2.5-7B-Instruct**: default model.
+- **Upstash Redis**: stores daily rate-limit counters in production.
 
 ## Project Structure
 
@@ -60,9 +78,12 @@ web/
 - Streaming responses.
 - System prompt editor.
 - Model selector UI with Qwen2.5-7B configured.
-- Copy and retry actions for assistant responses.
-- Daily 3-message-per-IP limit.
-- Response timing display.
+- Markdown rendering for assistant responses.
+- Copy buttons for full responses and individual code blocks.
+- Retry action for the latest assistant response.
+- Sidebar conversation history stored in the browser.
+- Daily 3-message-per-IP limit backed by Upstash Redis in production.
+- Response timing display in plain language.
 - Cold-start message while the Modal GPU wakes up.
 
 ## Cold Starts
@@ -147,9 +168,13 @@ Required environment variables:
 MODAL_BASE_URL=https://swarnakishoree--qwen-vllm-serve.modal.run
 MODAL_API_KEY=change-me
 QWEN_MODEL=Qwen/Qwen2.5-7B-Instruct
+UPSTASH_REDIS_REST_URL=change-me
+UPSTASH_REDIS_REST_TOKEN=change-me
 ```
 
 `MODAL_API_KEY` must match the `VLLM_API_KEY` value stored in the Modal secret.
+
+`UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` are used for persistent production rate limiting. If they are missing, the app falls back to an in-memory limiter for local development.
 
 ## Deploying to Vercel
 
@@ -180,5 +205,6 @@ Recommended first deploy:
 - The default model is `Qwen/Qwen2.5-7B-Instruct`.
 - The backend starts on an L4 GPU for lower-cost testing.
 - Model weights and vLLM artifacts are cached in Modal Volumes.
-- The rate limiter is in-memory and should be replaced with Redis or Upstash before broad public usage.
-- For public usage, add user auth, stronger request logging, and spend controls.
+- Production rate limiting uses Upstash Redis. Local development can fall back to the in-memory limiter.
+- Chat history is intentionally browser-local through `localStorage`; it does not sync across devices.
+- For broader public usage, add user auth, stronger request logging, moderation, and spend controls.
