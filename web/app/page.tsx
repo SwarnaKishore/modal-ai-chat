@@ -10,6 +10,15 @@ type ChatMessage = {
   meta?: string;
 };
 
+type Conversation = {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  model: string;
+  systemPrompt: string;
+  updatedAt: number;
+};
+
 type ChatErrorResponse = {
   error?: string;
   remaining?: number;
@@ -25,6 +34,12 @@ const MODELS = [
 ];
 
 const DEFAULT_SYSTEM = "You are a helpful AI assistant. Be concise and accurate.";
+const STORAGE_KEY = "modal-ai-chat.conversations";
+const MAX_STORED_CONVERSATIONS = 8;
+const WELCOME_MESSAGE: ChatMessage = {
+  role: "assistant",
+  content: "Ask me anything. I’ll stream the response as it comes in.",
+};
 
 function formatRateLimitStatus(remaining: number) {
   return `${remaining} ${remaining === 1 ? "chat" : "chats"} left today`;
@@ -37,13 +52,30 @@ function getNodeText(node: ReactNode): string {
   return "";
 }
 
+function createConversation(model: string): Conversation {
+  const now = Date.now();
+  return {
+    id: crypto.randomUUID(),
+    title: "New chat",
+    messages: [WELCOME_MESSAGE],
+    model,
+    systemPrompt: DEFAULT_SYSTEM,
+    updatedAt: now,
+  };
+}
+
+function getConversationTitle(messages: ChatMessage[]) {
+  const firstUserMessage = messages.find((message) => message.role === "user")?.content.trim();
+  if (!firstUserMessage) return "New chat";
+  return firstUserMessage.length > 48 ? `${firstUserMessage.slice(0, 45)}...` : firstUserMessage;
+}
+
+function isBlankConversation(conversation: Pick<Conversation, "messages">) {
+  return !conversation.messages.some((message) => message.role === "user" && message.content.trim());
+}
+
 export default function Home() {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      role: "assistant",
-      content: "Ask me anything. I’ll stream the response as it comes in.",
-    },
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
@@ -52,6 +84,9 @@ export default function Home() {
   const [selectedModel, setSelectedModel] = useState(MODELS[0].id);
   const [systemPrompt, setSystemPrompt] = useState(DEFAULT_SYSTEM);
   const [showSysPrompt, setShowSysPrompt] = useState(false);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [hasLoadedConversations, setHasLoadedConversations] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -61,6 +96,63 @@ export default function Home() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
+
+  useEffect(() => {
+    const fallbackConversation = createConversation(MODELS[0].id);
+
+    try {
+      const stored = window.localStorage.getItem(STORAGE_KEY);
+      const parsed = stored ? (JSON.parse(stored) as Conversation[]) : [];
+      const validConversations = Array.isArray(parsed)
+        ? parsed
+            .filter((conversation) => conversation.id && Array.isArray(conversation.messages))
+            .sort((a, b) => b.updatedAt - a.updatedAt)
+            .filter((conversation, index, sortedConversations) => {
+              if (!isBlankConversation(conversation)) return true;
+              return sortedConversations.findIndex(isBlankConversation) === index;
+            })
+            .slice(0, MAX_STORED_CONVERSATIONS)
+        : [];
+      const initialConversation = validConversations[0] ?? fallbackConversation;
+
+      setConversations(validConversations.length ? validConversations : [fallbackConversation]);
+      setActiveConversationId(initialConversation.id);
+      setMessages(initialConversation.messages.length ? initialConversation.messages : [WELCOME_MESSAGE]);
+      setSelectedModel(initialConversation.model || MODELS[0].id);
+      setSystemPrompt(initialConversation.systemPrompt || DEFAULT_SYSTEM);
+    } catch {
+      setConversations([fallbackConversation]);
+      setActiveConversationId(fallbackConversation.id);
+    } finally {
+      setHasLoadedConversations(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!hasLoadedConversations || !activeConversationId) return;
+
+    setConversations((currentConversations) => {
+      const updatedConversation: Conversation = {
+        id: activeConversationId,
+        title: getConversationTitle(messages),
+        messages,
+        model: selectedModel,
+        systemPrompt,
+        updatedAt: Date.now(),
+      };
+      const nextConversations = [
+        updatedConversation,
+        ...currentConversations.filter((conversation) => conversation.id !== activeConversationId),
+      ].slice(0, MAX_STORED_CONVERSATIONS);
+
+      try {
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextConversations));
+      } catch {
+        // Keep the active chat usable even if browser storage is unavailable.
+      }
+      return nextConversations;
+    });
+  }, [activeConversationId, hasLoadedConversations, messages, selectedModel, systemPrompt]);
 
   useEffect(() => {
     async function loadUsage() {
@@ -171,6 +263,43 @@ export default function Home() {
     await runInference(historyUpToUser);
   }
 
+  function startNewChat() {
+    if (isLoading) return;
+    if (!messages.some((message) => message.role === "user" && message.content.trim())) return;
+
+    const blankConversation = conversations.find(isBlankConversation);
+    if (blankConversation) {
+      selectConversation(blankConversation.id);
+      return;
+    }
+
+    const conversation = createConversation(selectedModel);
+    setConversations((currentConversations) => [conversation, ...currentConversations].slice(0, MAX_STORED_CONVERSATIONS));
+    setActiveConversationId(conversation.id);
+    setMessages(conversation.messages);
+    setInput("");
+    setCopiedIndex(null);
+    setCopiedCodeId(null);
+    setSystemPrompt(DEFAULT_SYSTEM);
+    setShowSysPrompt(false);
+  }
+
+  function selectConversation(id: string) {
+    if (isLoading || id === activeConversationId) return;
+
+    const conversation = conversations.find((item) => item.id === id);
+    if (!conversation) return;
+
+    setActiveConversationId(conversation.id);
+    setMessages(conversation.messages.length ? conversation.messages : [WELCOME_MESSAGE]);
+    setSelectedModel(conversation.model || MODELS[0].id);
+    setSystemPrompt(conversation.systemPrompt || DEFAULT_SYSTEM);
+    setInput("");
+    setCopiedIndex(null);
+    setCopiedCodeId(null);
+    setShowSysPrompt(false);
+  }
+
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== "Enter" || event.shiftKey) return;
     event.preventDefault();
@@ -193,7 +322,37 @@ export default function Home() {
 
   return (
     <main className="shell">
-      <section className="chat-panel" aria-label="Qwen chat">
+      <div className="app-layout">
+        <aside className="conversation-sidebar" aria-label="Conversation history">
+          <div className="sidebar-header">
+            <span>Chats</span>
+            <button
+              type="button"
+              className="new-chat-btn"
+              onClick={startNewChat}
+              disabled={isLoading}
+            >
+              + New chat
+            </button>
+          </div>
+
+          <nav className="conversation-list" aria-label="Saved chats">
+            {conversations.map((conversation) => (
+              <button
+                key={conversation.id}
+                type="button"
+                className={`conversation-item ${conversation.id === activeConversationId ? "active" : ""}`}
+                onClick={() => selectConversation(conversation.id)}
+                disabled={isLoading}
+                aria-current={conversation.id === activeConversationId ? "page" : undefined}
+              >
+                <span className="conversation-title">{conversation.title}</span>
+              </button>
+            ))}
+          </nav>
+        </aside>
+
+        <section className="chat-panel" aria-label="Qwen chat">
 
         {/* ── Topbar ── */}
         <header className="topbar">
@@ -376,7 +535,8 @@ export default function Home() {
           </div>
         </form>
 
-      </section>
+        </section>
+      </div>
     </main>
   );
 }
