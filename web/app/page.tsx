@@ -1,6 +1,8 @@
 "use client";
 
 import { FormEvent, KeyboardEvent, useEffect, useRef, useMemo, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -248,7 +250,13 @@ export default function Home() {
               </span>
 
               <div className="bubble">
-                <p>{message.content}</p>
+                {message.role === "assistant" ? (
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {message.content}
+                  </ReactMarkdown>
+                ) : (
+                  <p>{message.content}</p>
+                )}
               </div>
 
               {/* Actions — only on non-empty assistant messages */}
@@ -292,7 +300,7 @@ export default function Home() {
                   <div className="typing-indicator" aria-label="Waking GPU">
                     <span /><span /><span />
                   </div>
-                  <p>Waking GPU. First response can take a minute. Stays warm for about 5 minutes.</p>
+                  <p>Waking GPU. First response can take a few minutes. Stays warm for about 5 minutes.</p>
                 </div>
               </div>
             </article>
