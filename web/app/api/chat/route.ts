@@ -5,7 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 // ── Rate limiting (simple in-memory store) ────────────────────────────────
 // Uses Upstash Redis when configured, with an in-memory fallback for local dev.
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
-const DAILY_LIMIT = 3;
+const DAILY_LIMIT = Math.round(clampNumber(process.env.RATE_LIMIT_DAILY, 3, 1, 100));
 
 const redis =
   process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
@@ -158,7 +158,7 @@ export async function POST(req: NextRequest) {
   if (!allowed) {
     return NextResponse.json(
       {
-        error: "You’ve used today’s 3 chats. Try again tomorrow.",
+        error: `You’ve used today’s ${DAILY_LIMIT} ${DAILY_LIMIT === 1 ? "chat" : "chats"}. Try again tomorrow.`,
         limit: DAILY_LIMIT,
         remaining,
         resetAt: new Date(resetAt).toISOString(),

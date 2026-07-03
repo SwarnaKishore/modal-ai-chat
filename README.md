@@ -87,7 +87,7 @@ web/
 - Retry action for the latest assistant response.
 - Sidebar conversation history stored in the browser.
 - Delete individual chats and clear local chat history.
-- Daily 3-message-per-IP limit backed by Upstash Redis in production.
+- Env-configurable daily per-IP limit backed by Upstash Redis in production.
 - Response timing display in plain language.
 - Cold-start message while the Modal GPU wakes up.
 
@@ -186,6 +186,7 @@ QWEN_MODEL=Qwen/Qwen2.5-7B-Instruct
 UPSTASH_REDIS_REST_URL=change-me
 UPSTASH_REDIS_REST_TOKEN=change-me
 APP_ACCESS_CODE=change-me
+RATE_LIMIT_DAILY=3
 ```
 
 `MODAL_API_KEY` must match the `VLLM_API_KEY` value stored in the Modal secret.
@@ -193,6 +194,8 @@ APP_ACCESS_CODE=change-me
 `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` are used for persistent production rate limiting. If they are missing, the app falls back to an in-memory limiter for local development.
 
 `APP_ACCESS_CODE` is optional. When set, the UI asks for the code before showing the chat and `/api/chat` rejects requests without it. Leave it unset for an open local demo.
+
+`RATE_LIMIT_DAILY` controls how many chat requests each IP can make per day. It defaults to `3` and is clamped between `1` and `100`.
 
 ## Deploying to Vercel
 
@@ -224,6 +227,7 @@ Recommended first deploy:
 - The backend starts on an L4 GPU for lower-cost testing.
 - Model weights and vLLM artifacts are cached in Modal Volumes.
 - Production rate limiting uses Upstash Redis. Local development can fall back to the in-memory limiter.
+- `RATE_LIMIT_DAILY` lets the same build run with stricter demo limits or looser private testing limits.
 - `APP_ACCESS_CODE` is a lightweight sharing guard, not full user authentication.
 - Chat history is intentionally browser-local through `localStorage`; it does not sync across devices.
 - For broader public usage, add user auth, stronger request logging, moderation, and spend controls.
