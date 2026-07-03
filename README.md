@@ -89,6 +89,7 @@ web/
 - Delete individual chats and clear local chat history.
 - Env-configurable daily per-IP limit backed by Upstash Redis in production.
 - Response timing display in plain language.
+- Structured server logs for request status, rate limits, Modal handoff, and stream completion.
 - Cold-start message while the Modal GPU wakes up.
 
 ## Generation Settings
@@ -226,6 +227,7 @@ Recommended first deploy:
 - The default model is `Qwen/Qwen2.5-7B-Instruct`.
 - The backend starts on an L4 GPU for lower-cost testing.
 - Model weights and vLLM artifacts are cached in Modal Volumes.
+- `/api/chat` logs operational metadata only; prompts and responses are not logged.
 - Production rate limiting uses Upstash Redis. Local development can fall back to the in-memory limiter.
 - `RATE_LIMIT_DAILY` lets the same build run with stricter demo limits or looser private testing limits.
 - `APP_ACCESS_CODE` is a lightweight sharing guard, not full user authentication.

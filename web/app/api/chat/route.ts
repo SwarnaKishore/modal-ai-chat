@@ -15,6 +15,29 @@ const redis =
       })
     : null;
 
+function logChatEvent(event: string, details: Record<string, unknown>) {
+  console.log(JSON.stringify({ event, ...details }));
+}
+
+function getDurationMs(startedAt: number) {
+  return Math.round(performance.now() - startedAt);
+}
+
+function maskIp(ip: string) {
+  if (ip === "unknown") return ip;
+
+  if (ip.includes(".")) {
+    const parts = ip.split(".");
+    return parts.length === 4 ? `${parts[0]}.${parts[1]}.${parts[2]}.x` : "masked";
+  }
+
+  if (ip.includes(":")) {
+    return `${ip.split(":").slice(0, 3).join(":")}:...`;
+  }
+
+  return "masked";
+}
+
 function validateAccessCode(req: NextRequest) {
   const configuredCode = process.env.APP_ACCESS_CODE?.trim();
   if (!configuredCode) return null;
@@ -148,14 +171,40 @@ function clampNumber(value: unknown, fallback: number, min: number, max: number)
 
 // ── Handler ───────────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
+  const requestId = crypto.randomUUID();
+  const startedAt = performance.now();
+  const ip = getClientIp(req);
+
   const accessError = validateAccessCode(req);
-  if (accessError) return accessError;
+  if (accessError) {
+    logChatEvent("chat_request_blocked", {
+      requestId,
+      reason: "access_code",
+      ip: maskIp(ip),
+      durationMs: getDurationMs(startedAt),
+    });
+    return accessError;
+  }
+
+  logChatEvent("chat_request_start", {
+    requestId,
+    ip: maskIp(ip),
+    limiter: redis ? "redis" : "memory",
+    dailyLimit: DAILY_LIMIT,
+  });
 
   // 1. Rate limit
-  const ip = getClientIp(req);
   const { allowed, remaining, resetAt } = await checkRateLimit(ip);
 
   if (!allowed) {
+    logChatEvent("chat_request_blocked", {
+      requestId,
+      reason: "rate_limit",
+      remaining,
+      resetAt: new Date(resetAt).toISOString(),
+      durationMs: getDurationMs(startedAt),
+    });
+
     return NextResponse.json(
       {
         error: `You’ve used today’s ${DAILY_LIMIT} ${DAILY_LIMIT === 1 ? "chat" : "chats"}. Try again tomorrow.`,
@@ -179,12 +228,24 @@ export async function POST(req: NextRequest) {
   try {
     body = await req.json();
   } catch {
+    logChatEvent("chat_request_error", {
+      requestId,
+      reason: "invalid_body",
+      status: 400,
+      durationMs: getDurationMs(startedAt),
+    });
     return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
   }
 
   const { messages, model, systemPrompt, temperature, maxTokens } = body;
 
   if (!Array.isArray(messages) || messages.length === 0) {
+    logChatEvent("chat_request_error", {
+      requestId,
+      reason: "missing_messages",
+      status: 400,
+      durationMs: getDurationMs(startedAt),
+    });
     return NextResponse.json({ error: "Messages array is required." }, { status: 400 });
   }
 
@@ -199,12 +260,28 @@ export async function POST(req: NextRequest) {
   const vllmMessages = [systemMessage, ...filteredMessages];
   const safeTemperature = clampNumber(temperature, 0.7, 0, 1.5);
   const safeMaxTokens = Math.round(clampNumber(maxTokens, 1024, 128, 2048));
+  const resolvedModel = model ?? "Qwen/Qwen2.5-7B-Instruct";
+
+  logChatEvent("chat_request_validated", {
+    requestId,
+    model: resolvedModel,
+    messages: filteredMessages.length,
+    maxTokens: safeMaxTokens,
+    temperature: safeTemperature,
+    remaining,
+  });
 
   // 4. Forward to Modal/vLLM
   const modalUrl = process.env.MODAL_BASE_URL;
   const modalApiKey = process.env.MODAL_API_KEY;
 
   if (!modalUrl || !modalApiKey) {
+    logChatEvent("chat_request_error", {
+      requestId,
+      reason: "missing_modal_config",
+      status: 500,
+      durationMs: getDurationMs(startedAt),
+    });
     return NextResponse.json(
       { error: "MODAL_BASE_URL or MODAL_API_KEY is not configured." },
       { status: 500 }
@@ -220,7 +297,7 @@ export async function POST(req: NextRequest) {
         Authorization: `Bearer ${modalApiKey}`,
       },
       body: JSON.stringify({
-        model: model ?? "Qwen/Qwen2.5-7B-Instruct",
+        model: resolvedModel,
         messages: vllmMessages,
         stream: true,
         max_tokens: safeMaxTokens,
@@ -228,6 +305,12 @@ export async function POST(req: NextRequest) {
       }),
     });
   } catch (err) {
+    logChatEvent("chat_request_error", {
+      requestId,
+      reason: "modal_fetch_failed",
+      status: 502,
+      durationMs: getDurationMs(startedAt),
+    });
     console.error("Modal upstream error:", err);
     return NextResponse.json(
       { error: "The model server is currently paused or unavailable. Please try again later." },
@@ -235,8 +318,20 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  logChatEvent("chat_upstream_connected", {
+    requestId,
+    status: upstreamResponse.status,
+    durationMs: getDurationMs(startedAt),
+  });
+
   if (!upstreamResponse.ok) {
     const text = await upstreamResponse.text().catch(() => "");
+    logChatEvent("chat_request_error", {
+      requestId,
+      reason: "modal_error_response",
+      status: upstreamResponse.status,
+      durationMs: getDurationMs(startedAt),
+    });
     console.error("Modal error response:", text);
 
     const errorMessage =
@@ -254,8 +349,22 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const responseBody = upstreamResponse.body?.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        controller.enqueue(chunk);
+      },
+      flush() {
+        logChatEvent("chat_stream_complete", {
+          requestId,
+          durationMs: getDurationMs(startedAt),
+        });
+      },
+    })
+  );
+
   // 5. Stream response back with rate limit header
-  return new Response(upstreamResponse.body, {
+  return new Response(responseBody, {
     headers: {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
