@@ -4,23 +4,31 @@ Self-hosted Qwen chat app using Modal for GPU inference, vLLM for model serving,
 
 ## Screenshots
 
-Screenshots will be added after the UI is finalized.
+### Main Chat
 
-- Main chat view with sidebar history.
-- Streaming response with Markdown and copyable code blocks.
+![Main chat UI](web/public/screenshots/main-chat.png)
+
+### Settings
+
+![Settings drawer](web/public/screenshots/settings.png)
+
+### Markdown Code Blocks
+
+![Markdown code block with copy action](web/public/screenshots/code-block.png)
 
 ## What This Demonstrates
 
-- Streaming chat responses from a self-hosted open model.
-- A server-side Next.js API proxy that keeps Modal credentials out of the browser.
-- Modal GPU deployment with vLLM's OpenAI-compatible chat API.
-- Persistent daily per-IP rate limiting with Upstash Redis.
-- Cold-start-aware UX for serverless GPU inference.
-- Settings drawer for system prompt, temperature, and max response length.
-- Markdown rendering with copyable code blocks.
-- Local browser chat history with a ChatGPT-style sidebar, delete, and clear controls.
-- User-controlled streaming cancellation with partial response preservation.
-- Response timing that shows when the model started responding and when it finished.
+This project explores what it takes to run an open model behind a production-style chat experience instead of relying only on a hosted model API. The browser stays lightweight, requests go through a Next.js API layer, and inference runs on a Modal-hosted vLLM server serving Qwen.
+
+The project focuses on the pieces that matter in a deployed LLM app:
+
+- keeping API keys server-side
+- streaming responses back to the browser
+- handling GPU cold starts in the UI
+- adding rate limits and an access code to protect usage
+- rendering Markdown and code blocks cleanly
+- saving chat history locally for a smoother demo
+- logging request status and timing without logging prompts or responses
 
 ## Architecture
 
