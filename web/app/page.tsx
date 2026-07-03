@@ -39,6 +39,7 @@ const DEFAULT_SYSTEM = "You are a helpful AI assistant. Be concise and accurate.
 const DEFAULT_TEMPERATURE = 0.7;
 const DEFAULT_MAX_TOKENS = 1024;
 const STORAGE_KEY = "modal-ai-chat.conversations";
+const ACCESS_CODE_STORAGE_KEY = "modal-ai-chat.access-code";
 const MAX_STORED_CONVERSATIONS = 8;
 const WELCOME_MESSAGE: ChatMessage = {
   role: "assistant",
@@ -107,6 +108,11 @@ export default function Home() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [hasLoadedConversations, setHasLoadedConversations] = useState(false);
+  const [hasAccess, setHasAccess] = useState<boolean | null>(null);
+  const [accessCode, setAccessCode] = useState("");
+  const [verifiedAccessCode, setVerifiedAccessCode] = useState("");
+  const [accessError, setAccessError] = useState("");
+  const [isCheckingAccess, setIsCheckingAccess] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -119,6 +125,43 @@ export default function Home() {
   }, [messages, isLoading]);
 
   useEffect(() => {
+    async function checkStoredAccess() {
+      const response = await fetch("/api/auth");
+      const settings = (await response.json().catch(() => null)) as { enabled?: boolean } | null;
+
+      if (!settings?.enabled) {
+        setHasAccess(true);
+        return;
+      }
+
+      const storedCode = window.sessionStorage.getItem(ACCESS_CODE_STORAGE_KEY) ?? "";
+      if (!storedCode) {
+        setHasAccess(false);
+        return;
+      }
+
+      const verifyResponse = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: storedCode }),
+      });
+
+      if (verifyResponse.ok) {
+        setVerifiedAccessCode(storedCode);
+        setHasAccess(true);
+        return;
+      }
+
+      window.sessionStorage.removeItem(ACCESS_CODE_STORAGE_KEY);
+      setHasAccess(false);
+    }
+
+    void checkStoredAccess().catch(() => setHasAccess(false));
+  }, []);
+
+  useEffect(() => {
+    if (!hasAccess) return;
+
     const fallbackConversation = createConversation(MODELS[0].id);
 
     try {
@@ -149,7 +192,7 @@ export default function Home() {
     } finally {
       setHasLoadedConversations(true);
     }
-  }, []);
+  }, [hasAccess]);
 
   useEffect(() => {
     if (!hasLoadedConversations || !activeConversationId) return;
@@ -176,8 +219,15 @@ export default function Home() {
   }, [activeConversationId, hasLoadedConversations, maxTokens, messages, selectedModel, systemPrompt, temperature]);
 
   useEffect(() => {
+    if (!hasAccess) return;
+
     async function loadUsage() {
-      const response = await fetch("/api/chat");
+      const headers = verifiedAccessCode ? { "x-app-access-code": verifiedAccessCode } : undefined;
+      const response = await fetch("/api/chat", { headers });
+      if (response.status === 401) {
+        setHasAccess(false);
+        return;
+      }
       if (!response.ok) return;
 
       const usage = (await response.json().catch(() => null)) as RateLimitResponse | null;
@@ -187,7 +237,7 @@ export default function Home() {
     }
 
     void loadUsage();
-  }, []);
+  }, [hasAccess, verifiedAccessCode]);
 
   async function runInference(history: ChatMessage[]) {
     setIsLoading(true);
@@ -199,7 +249,10 @@ export default function Home() {
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(verifiedAccessCode ? { "x-app-access-code": verifiedAccessCode } : {}),
+        },
         signal: abortController.signal,
         body: JSON.stringify({
           messages: history,
@@ -264,7 +317,7 @@ export default function Home() {
     } catch (error) {
       if (abortController.signal.aborted || isAbortError(error)) {
         const elapsedSeconds = (performance.now() - startedAt) / 1000;
-        const content = assistantContent || "Stopped before the model started responding.";
+        const content = assistantContent || "Stopped while the model was still getting ready.";
         setMessages([
           ...history,
           {
@@ -292,6 +345,38 @@ export default function Home() {
     setMessages(nextMessages);
     setInput("");
     await runInference(nextMessages);
+  }
+
+  async function submitAccessCode(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const code = accessCode.trim();
+    if (!code) return;
+
+    setIsCheckingAccess(true);
+    setAccessError("");
+
+    try {
+      const response = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+
+      if (!response.ok) {
+        const error = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(error?.error ?? "Enter the correct access code to use this app.");
+      }
+
+      window.sessionStorage.setItem(ACCESS_CODE_STORAGE_KEY, code);
+      setVerifiedAccessCode(code);
+      setHasAccess(true);
+      setAccessCode("");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to verify access code.";
+      setAccessError(message);
+    } finally {
+      setIsCheckingAccess(false);
+    }
   }
 
   async function retryLast() {
@@ -397,6 +482,37 @@ export default function Home() {
   }
 
   const currentModelLabel = MODELS.find((m) => m.id === selectedModel)?.label ?? selectedModel;
+
+  if (hasAccess !== true) {
+    return (
+      <main className="shell">
+        <section className="access-panel" aria-label="App access">
+          <div className="model-avatar access-avatar" aria-hidden="true">🤖</div>
+          <h1>Qwen Chat</h1>
+          <p>Enter the access code to use this self-hosted chat app.</p>
+          {hasAccess === null ? (
+            <p className="access-status">Checking access...</p>
+          ) : (
+            <form className="access-form" onSubmit={submitAccessCode}>
+              <input
+                type="password"
+                value={accessCode}
+                onChange={(event) => setAccessCode(event.target.value)}
+                placeholder="Access code"
+                aria-label="Access code"
+                autoComplete="current-password"
+                disabled={isCheckingAccess}
+              />
+              <button type="submit" disabled={!accessCode.trim() || isCheckingAccess}>
+                {isCheckingAccess ? "Checking..." : "Unlock"}
+              </button>
+              {accessError && <p className="access-error">{accessError}</p>}
+            </form>
+          )}
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="shell">
@@ -635,7 +751,7 @@ export default function Home() {
                   <div className="typing-indicator" aria-label="Waking GPU">
                     <span /><span /><span />
                   </div>
-                  <p>Waking GPU. First response can take a few minutes. Stays warm for about 5 minutes.</p>
+                  <p>Waking GPU. First response can take a few minutes. Future replies are faster while it stays warm.</p>
                 </div>
               </div>
             </article>

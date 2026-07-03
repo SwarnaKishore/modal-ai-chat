@@ -78,6 +78,7 @@ web/
 ## Features
 
 - Streaming responses.
+- Optional access-code gate to protect the Modal-backed API.
 - Stop generating control for active streams.
 - Settings drawer for system prompt, temperature, and max tokens.
 - Model selector UI with Qwen2.5-7B configured.
@@ -184,11 +185,14 @@ MODAL_API_KEY=change-me
 QWEN_MODEL=Qwen/Qwen2.5-7B-Instruct
 UPSTASH_REDIS_REST_URL=change-me
 UPSTASH_REDIS_REST_TOKEN=change-me
+APP_ACCESS_CODE=change-me
 ```
 
 `MODAL_API_KEY` must match the `VLLM_API_KEY` value stored in the Modal secret.
 
 `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` are used for persistent production rate limiting. If they are missing, the app falls back to an in-memory limiter for local development.
+
+`APP_ACCESS_CODE` is optional. When set, the UI asks for the code before showing the chat and `/api/chat` rejects requests without it. Leave it unset for an open local demo.
 
 ## Deploying to Vercel
 
@@ -220,5 +224,6 @@ Recommended first deploy:
 - The backend starts on an L4 GPU for lower-cost testing.
 - Model weights and vLLM artifacts are cached in Modal Volumes.
 - Production rate limiting uses Upstash Redis. Local development can fall back to the in-memory limiter.
+- `APP_ACCESS_CODE` is a lightweight sharing guard, not full user authentication.
 - Chat history is intentionally browser-local through `localStorage`; it does not sync across devices.
 - For broader public usage, add user auth, stronger request logging, moderation, and spend controls.
