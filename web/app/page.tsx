@@ -28,6 +28,7 @@ type ChatErrorResponse = {
 };
 
 type RateLimitResponse = {
+  limit?: number;
   remaining?: number;
 };
 
@@ -99,7 +100,7 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
-  const [rateLimitStatus, setRateLimitStatus] = useState("3 chats left today");
+  const [rateLimitStatus, setRateLimitStatus] = useState("Checking chats");
   const [selectedModel, setSelectedModel] = useState(MODELS[0].id);
   const [systemPrompt, setSystemPrompt] = useState(DEFAULT_SYSTEM);
   const [temperature, setTemperature] = useState(DEFAULT_TEMPERATURE);
