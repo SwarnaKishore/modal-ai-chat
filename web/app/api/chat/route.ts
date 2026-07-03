@@ -211,7 +211,7 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     console.error("Modal upstream error:", err);
     return NextResponse.json(
-      { error: "The model server is waking up or temporarily unavailable. Please try again in a moment." },
+      { error: "The model server is currently paused or unavailable. Please try again later." },
       { status: 502 }
     );
   }
@@ -226,7 +226,7 @@ export async function POST(req: NextRequest) {
         : upstreamResponse.status === 429
           ? "The model server is busy right now. Please try again in a moment."
           : upstreamResponse.status >= 500
-            ? "The model server is warming up or temporarily unavailable. Please try again shortly."
+            ? "The model server is currently paused or unavailable. Please try again later."
             : "The model server could not complete this request. Please try again.";
 
     return NextResponse.json(
