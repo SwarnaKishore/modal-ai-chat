@@ -15,6 +15,19 @@ const redis =
       })
     : null;
 
+function validateAccessCode(req: NextRequest) {
+  const configuredCode = process.env.APP_ACCESS_CODE?.trim();
+  if (!configuredCode) return null;
+
+  const providedCode = req.headers.get("x-app-access-code")?.trim();
+  if (providedCode === configuredCode) return null;
+
+  return NextResponse.json(
+    { error: "Enter the correct access code to use this app." },
+    { status: 401 }
+  );
+}
+
 function getClientIp(req: NextRequest) {
   return req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
 }
@@ -101,6 +114,9 @@ async function checkRateLimit(ip: string) {
 }
 
 export async function GET(req: NextRequest) {
+  const accessError = validateAccessCode(req);
+  if (accessError) return accessError;
+
   const status = await getRateLimitStatus(getClientIp(req));
 
   return NextResponse.json({
@@ -132,6 +148,9 @@ function clampNumber(value: unknown, fallback: number, min: number, max: number)
 
 // ── Handler ───────────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
+  const accessError = validateAccessCode(req);
+  if (accessError) return accessError;
+
   // 1. Rate limit
   const ip = getClientIp(req);
   const { allowed, remaining, resetAt } = await checkRateLimit(ip);
